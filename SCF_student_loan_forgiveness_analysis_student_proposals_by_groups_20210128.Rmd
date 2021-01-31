@@ -1,0 +1,431 @@
+---
+title: "Survey of Consumer Finance student loan forgiveness analysis by groups--student proposals"
+author: "Harold Pollack"
+date: "1/28/2021"
+output:
+  word_document: default
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE, echo=FALSE, warn=-1}
+library("UsingR")
+library("dplyr")
+library("knitr")
+library("ggplot2")
+library("xts")
+library("questionr")
+library("janitor")
+library("lubridate")
+library("epiDisplay")
+library("reshape2")
+library("plotly")
+library("formattable")
+library("data.table")
+library("naniar") 
+library("scales") 
+options(width = 1200)
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This markdown file analyzes student loan data 2019 Survey of Consumer Finance files.
+In particular, it models proposals to "forgive" the first $K owed within defined populations, defined by an indicator dselect=1. A function does the rest of the work.
+It provides the basis for some policies for student loan forgiveness.
+We only examine the first six loans held by respondent or spouse.
+We also follow Gale, Gelfond, Fitchtner, and Harris (2020) by multiplying SCF’s survey weight x42001 by 0.2 to produce summary statistics.
+https://protectborrowers.org/new-data-show-borrowers-of-color-and-low-income-borrowers-are-missing-out-on-key-protections-raising-significant-fair-lending-concerns/
+We will restrict to loans owed by respondent or spouse, given data challenges to evaluating loans by other household members
+
+
+
+
+
+```{r read SCF 2019, cache=TRUE, echo=FALSE}
+#
+#    Read 2019 Survey of Consumer finance
+#    Original dataset downloaded from https://www.federalreserve.gov/econres/files/scf2019ascii.zip
+#    The dataframe will be used in the analysis
+#
+load("/Users/haroldpollack/Documents/SCF/p19i6.rdata")
+df_student_loan<-p19i6
+```
+
+Forgiveness with distribution across groups
+
+```{r function for descriptives on forgiveness across groups, echo=FALSE}
+forgive_descript_groups<-function(df, forgive_threshold)
+#
+#      This provides more detail on where the money is going.
+#
+{
+ #
+ #   df is the basic student loan dataframe, deselect will be the key variable to select populations eligible for forgiveness
+ #   forgive_threshold is the level of loans to be forgiven within the population.
+ #
+  print(" ")
+  print( paste("forgiveness threshold--",prettyNum(forgive_threshold,big.mark = ",")))   
+  print(" ")
+  #
+  #   Somewhat wastefully, I create this dataframe df2 that includes the variables we will use for the analysis.
+  #
+  df2<-subset(df,dselect==1,select=c(dblack,dhisp,x42001,total_loan_amount,dselect,dpublic_aid,fam_income,total_loan_amount_owed) )
+  thresh_print<-prettyNum(forgive_threshold,big.mark = ",")
+  #
+  # We compute the weighted amount owed--Note that the SCF is a weighted sample, with weight x42001 in the dataset
+  #
+  Mean_loan_amount_owed <- prettyNum(weighted.mean(df2$total_loan_amount_owed,df2$x42001),big.mark = ",")
+  print( paste("Mean loan amount borrowed in the group with threshold ",thresh_print, " ",Mean_loan_amount_owed)) 
+  #
+  #    We compute the amount of money forgiven if we forgive up to the first $forgive_threshold of what people owe.
+  #
+  #    pmin is an annoying nicety required by R to create a variable that indicates the amount of loan forgiven.
+  #
+  df2 <- transform(df2, amount_forgiven = pmin(total_loan_amount_owed, forgive_threshold))
+  #
+  #      Now we compute the mean amount forgiven
+  #
+  Mean_loan_amount_forgiven <- prettyNum(weighted.mean(df2$amount_forgiven,df2$x42001),big.mark = ",")
+  print( paste("Mean loan amount forgiven in the group with threshold ",thresh_print, " ",Mean_loan_amount_forgiven)) 
+  #
+  #       This is how much people owe after forgiveness
+  #
+ df2$post_forgiveness_amount_owed<-df2$total_loan_amount_owed-df2$amount_forgiven
+  #
+  #      Now we add up across the whole sample to estimate the total number of dollars forgiven. The sum is weighted by each observation's sample weight
+  #
+ total_loan_amount_forgiven <- prettyNum( 0.2*sum(df2$amount_forgiven*df2$x42001),big.mark = ",")
+    print( paste("Estimated total loan amount forgiven  ","$",total_loan_amount_forgiven)) 
+#
+# Now provide total amount forgiven by key groups of interest dblack, dhisp, and so on are dummy 0-1 variables.
+#
+#       Total amount owed by Black respondents
+#       I create a dummy (0-1) variable for people in the category.
+#
+total_loan_amount_forgiven_black <- prettyNum( 0.2*sum(df2$amount_forgiven*df2$x42001*df2$dblack),big.mark = ",")
+    print( paste("Estimated total loan amount forgiven--Black group  ","$",total_loan_amount_forgiven_black))
+#
+#       Total amount owed by Hispanic respondents
+#       I create a dummy (0-1) variable for people in the category.
+#
+total_loan_amount_forgiven_hisp <- prettyNum( 0.2*sum(df2$amount_forgiven*df2$x42001*df2$dhisp),big.mark = ",")
+    print( paste("Estimated total loan amount forgiven--Hispanic group  ","$",total_loan_amount_forgiven_hisp)) 
+#
+#      How much of the money goes to roughly the bottom quarter of the family income distribution--about $34,000/yr. Note that there are some negative incomes.
+#      I create a dummy (0-1) variable for people in the category 
+#
+df2$d34000<-as.numeric(df2$fam_income>=-900000 & df2$fam_income<=34000)
+total_loan_amount_forgiven_34000 <- prettyNum( 0.2*sum(df2$amount_forgiven*df2$x42001*df2$d34000),big.mark = ",")
+    print( paste("Estimated total loan amount forgiven--Family income less than $34,000  ","$",total_loan_amount_forgiven_34000)) 
+#
+#      How much of the money goes to families with SNAP, SSI, TANF or other public assistance income? .
+#
+total_loan_amount_forgiven_public_aid <- prettyNum( 0.2*sum(df2$amount_forgiven*df2$x42001*df2$dpublic_aid),big.mark = ",")
+    print( paste("Estimated total loan amount forgiven--Families receiving public aid income (e.g. SSI/TANF/SNAP)  ","$",total_loan_amount_forgiven_public_aid )) 
+#
+#      How much of the money goes to high-income families with incomes exceeding $100,000/yr. 
+#
+df2$d100000<-as.numeric(df2$fam_income>=100000 & df2$fam_income<=100000000)
+#
+total_loan_amount_forgiven_100000 <- prettyNum( 0.2*sum(df2$amount_forgiven*df2$x42001*df2$d100000),big.mark = ",")
+    print( paste("Estimated total loan amount forgiven--Family income greater than $100,000  ","$",total_loan_amount_forgiven_100000)) 
+#
+#      Dummy variable for loan forgiveness, then weighted by the sample weight
+#
+ df2$dforgiveness<-as.numeric(df2$amount_forgiven>=1 & df2$amount_forgiven<100000000)
+ df2$wt_forgiven<-df2$dforgiveness*df2$x42001
+ #
+ #    Find the distribution of family income among those with loan forgiveness. I only use the 25th, 50th, and 75th percentile
+ #
+v_owed<- wtd.quantile (df2$fam_income, probs=c(0, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.7, 0.75, 0.8, 0.85,0.9,0.95, 0.99, 1), na.rm = FALSE, weight=df2$wt_forgiven)
+print(paste("25th percentile of Family income distribution in this forgiven group when amount owed below $", thresh_print, "--",prettyNum(as.numeric(v_owed)[3],big.mark = ",")))
+print(paste("50th percentile of Family income distribution in this forgiven group when amount owed below $", thresh_print, "--",prettyNum(as.numeric(v_owed)[6],big.mark = ",")))
+print(paste("75th percentile of Family income distribution in this forgiven group when amount owed below $", thresh_print, "--",prettyNum(as.numeric(v_owed)[9],big.mark = ",")))
+#
+#   Proportion of the demographic groups with at least some loan forgiveness in each group.
+#
+Mean_black_forgiven <- weighted.mean(df2$dblack,df2$wt_forgiven)
+  print( paste("Mean proportion Black--forgiven debt below $",thresh_print, " ", Mean_black_forgiven)) 
+Mean_hisp_forgiven <- weighted.mean(df2$dhisp,df2$wt_forgiven)
+  print( paste("Mean proportion Hisp--forgiven debt below $",thresh_print, " ", Mean_hisp_forgiven)) 
+
+Mean_public_aid_forgiven <- weighted.mean(df2$dpublic_aid,df2$wt_forgiven)
+print( paste("Mean proportion Public aid--forgiven debt below $",thresh_print, " ", Mean_public_aid_forgiven)) 
+  v<-c(Mean_black_forgiven,Mean_hisp_forgiven,Mean_public_aid_forgiven)
+return(v)
+}
+```
+
+Now we get to the program.
+
+
+```{r manipulate new SCF file,echo=FALSE}
+#
+#   Show some characteristics of the SCF data
+#
+#    Number of obs and other characteristics
+#
+nrow2<-nrow(df_student_loan)
+print( paste("Number of observations: ", nrow2))
+summary(df_student_loan$x7179)
+print( paste("Student loan?: ")) 
+table(df_student_loan$x7801)
+print( paste("Number of loans: ")) 
+table(df_student_loan$x7802)
+sumwt<-sum(df_student_loan$x42001)
+print( paste("Sum of weights--full sample: ", sumwt))
+
+#
+#     Keep only the group with loans     
+#
+df_student_loan <- subset(df_student_loan, x7802 > 0 & x7802 < 8) 
+
+
+#
+#    Define key variables
+#    Public assistance x5719=1
+#
+df_student_loan$dpublic_aid<-as.numeric(df_student_loan$x5719==1)
+print( paste("Public assistance income? ")) 
+table(df_student_loan$dpublic_aid)
+#
+# Does loan belong to householder or spouse
+#
+df_student_loan$dloan_own1<-as.numeric(df_student_loan$x7978==1|df_student_loan$x7978==2)
+print( paste("Loan1 for student or spouse? ")) 
+table(df_student_loan$dloan_own1,df_student_loan$x7802)
+
+
+df_student_loan$dloan_own2<-as.numeric(df_student_loan$x7883==1|df_student_loan$x7883==2) 
+print( paste("Loan2 for student or spouse? ")) 
+table(df_student_loan$dloan_own2,df_student_loan$x7802)
+
+df_student_loan$dloan_own3<-as.numeric(df_student_loan$x7888==1|df_student_loan$x7888==2) 
+print( paste("Loan3 for student or spouse? ")) 
+table(df_student_loan$dloan_own3,df_student_loan$x7802)
+
+df_student_loan$dloan_own4<-as.numeric(df_student_loan$x7893==1|df_student_loan$x7893==2) 
+print( paste("Loan4 for student or spouse? ")) 
+table(df_student_loan$dloan_own4,df_student_loan$x7802)
+
+df_student_loan$dloan_own5<-as.numeric(df_student_loan$x7898==1|df_student_loan$x7898==2) 
+print( paste("Loan5 for student or spouse? ")) 
+table(df_student_loan$dloan_own5,df_student_loan$x7802)
+
+df_student_loan$dloan_own6<-as.numeric(df_student_loan$x7993==1|df_student_loan$x7993==2) 
+print( paste("Loan6 for student or spouse? ")) 
+table(df_student_loan$dloan_own6,df_student_loan$x7802)
+
+```
+
+
+```{r, manipulate loan totals,echo=FALSE}
+
+sumwt<-sum(df_student_loan$x42001)
+#summary(df_student_loan$x42001)
+#
+#     Age
+#
+#print( paste("Age variable:"))
+#table(df_student_loan$x8022)
+#print( paste("Age variable:"))
+#table(df_student_loan$x13)
+print( paste("Hispanic/Latino:"))
+table(df_student_loan$x7004)
+print( paste("race variable:"))
+table(df_student_loan$x6809)
+print( paste("Sum of weights student loan sample: ", sumwt))
+#
+#    Race ethicity
+#
+df_student_loan$dblack<-as.numeric(df_student_loan$x6809==2|df_student_loan$x6810==2)
+#
+#     Hispanic/Latino defined as x7004=1. Not mutually exclusive with black or other race variables.
+#
+df_student_loan$dhisp<-as.numeric(df_student_loan$x7004==1)
+df_student_loan$drace_other<-as.numeric(df_student_loan$x6809==-7 & df_student_loan$dblack==0 & df_student_loan$dhisp==0 )
+print( paste("Black by Hispanic table"))
+table(df_student_loan$dblack,df_student_loan$dhisp)
+table(df_student_loan$x6809,df_student_loan$dhisp)
+table(df_student_loan$x6810,df_student_loan$dhisp)
+
+print( paste("Other category"))
+table(df_student_loan$drace_other)
+#
+#      Let's restrict to loans owed by householder or spouse--difficult to analyze loans held by children or others in the family/household
+#
+df_student_loan$total_loan_amount<-df_student_loan$x7805*df_student_loan$dloan_own1+df_student_loan$x7828*df_student_loan$dloan_own2+df_student_loan$x7851*df_student_loan$dloan_own3+df_student_loan$x7905*df_student_loan$dloan_own4+df_student_loan$x7928*df_student_loan$dloan_own5+df_student_loan$x7951*df_student_loan$dloan_own6
+print( paste("Total loan amount--householder and spouse only")) 
+quantile(df_student_loan$total_loan_amount, probs = seq(0, 1, by= 0.05)) # decile
+wtd.quantile (df_student_loan$total_loan_amount, probs=c(0, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.7, 0.75, 0.8, 0.85,0.9,0.95, 0.99, 1), na.rm = FALSE, weight=df_student_loan$x42001)
+
+#
+#    Public assistance
+#
+df_student_loan$wtp_ass<-df_student_loan$x42001*df_student_loan$dpublic_aid
+#
+
+
+
+
+df_student_loan$dstudent_loan<-as.numeric((df_student_loan$x7801==1))
+#print( paste("Student loans"))
+#table(df_student_loan$dstudent_loan)
+df_student_loan$fam_income<-df_student_loan$x5729
+fam_income_overall<- weighted.mean(df_student_loan$fam_income, df_student_loan$x42001)
+print( paste("Mean family income--overall: ", fam_income_overall))
+print( paste("Family income")) 
+quantile(df_student_loan$total_loan_amount, probs = seq(0, 1, by= 0.05)) # decile
+df_student_loan$wt_student_loan<- df_student_loan$x42001*df_student_loan$dstudent_loan
+print( paste("Student loan weight: ")) 
+summary(df_student_loan$wt_student_loan)       
+df_student_loan$wt_no_student_loan<-df_student_loan$x42001-df_student_loan$wt_student_loan
+#
+#   Suppressed the no student loan data in this iteration
+#
+#print( paste("No student loan weight: ")) 
+#summary(df_student_loan$wt_no_student_loan)       
+fam_income_loan<- weighted.mean(df_student_loan$fam_income, df_student_loan$wt_student_loan)
+#fam_income_no_loan <- weighted.mean(df_student_loan$fam_income, df_student_loan$wt_no_student_loan)
+print( paste("Mean family income--loans: ", fam_income_loan))
+#print( paste("Mean family income--no loans: ", fam_income_no_loan))
+
+```
+
+Now amount still owed
+
+```{r amount still owed, echo=FALSE}
+#
+#    total loan amount owed
+#
+df_student_loan$total_loan_amount_owed<-df_student_loan$x7824*df_student_loan$dloan_own1+df_student_loan$x7847*df_student_loan$dloan_own2+df_student_loan$x7870*df_student_loan$dloan_own3+df_student_loan$x7924*df_student_loan$dloan_own4+df_student_loan$x7947*df_student_loan$dloan_own5+df_student_loan$x7970*df_student_loan$dloan_own6
+print( paste("Total loan amount still owed")) 
+summary(df_student_loan$total_loan_amount_owed)
+wtd.quantile (df_student_loan$total_loan_amount_owed, probs=c(0, 0.2,  0.25, 0.3, 0.4, 0.5, 0.6, 0.7, 0.75, 0.8, 0.85,0.9,0.95, 0.99, 1), na.rm = FALSE, weight=df_student_loan$wt_student_loan)
+
+
+df_student_loan$dstudent_loan<-as.numeric((df_student_loan$x7801==1))
+#print( paste("Student loans still owed"))
+table(df_student_loan$dstudent_loan)
+df_student_loan$fam_income<-df_student_loan$x5729
+fam_income_overall<- weighted.mean(df_student_loan$fam_income, df_student_loan$x42001)
+print( paste("Mean family income--overall: ", fam_income_overall))
+
+df_student_loan$wt_student_loan<- df_student_loan$x42001*df_student_loan$dstudent_loan
+df_student_loan$wt_no_student_loan<-df_student_loan$x42001-df_student_loan$wt_student_loan
+fam_income_loan<- weighted.mean(df_student_loan$fam_income, df_student_loan$wt_student_loan)
+
+print( paste("Mean family income--loans owed: ", fam_income_loan))
+#print( paste("Mean family income--no loans owed: ", fam_income_no_loan))
+
+Mean_loan_amount <- weighted.mean(df_student_loan$total_loan_amount,df_student_loan$wt_student_loan)
+print( paste("Mean loan amount owed: ", Mean_loan_amount))
+```
+
+Looping through forgiveness outcomes, with calls to forgive_descript_groups given different selected groups and levels of forgiveness
+
+```{r, looping through the forgiveness function,echo=FALSE}
+# 
+# Sanders proposals--Basically everyone. Top-code at $1 million for data reasons
+#
+df_student_loan$dselect<- 1
+thresh_label<-"All loans less than $1 million"
+print( paste("All loans less than $1 million"))
+forgive_threshold<-1000000
+print( paste("forgiveness threshold ",prettyNum(forgive_threshold,big.mark = ",")))  
+forgive_descript_groups(df_student_loan,forgive_threshold)
+
+# 
+# All black and Hispanic with loans less than $1,000,000
+#
+df_student_loan$dselect<- as.numeric( df_student_loan$dblack==1 | df_student_loan$dhisp==1)
+thresh_label<-"Black or Hispanic with loans less than $1million"
+print( paste("Black or Hispanic"))
+forgive_threshold<-1000000
+print( paste("forgiveness threshold ",prettyNum(forgive_threshold,big.mark = ",")))  
+forgive_descript_groups(df_student_loan,forgive_threshold)
+# 
+# All households receiving public assistance income
+#
+df_student_loan$dselect<- as.numeric( df_student_loan$dpublic_aid==1)
+thresh_label<-"Public aid income with loans less than $1million"
+print( paste("Public aid"))
+forgive_threshold<-1000000
+print( paste("forgiveness threshold ",prettyNum(forgive_threshold,big.mark = ",")))  
+forgive_descript_groups(df_student_loan,forgive_threshold)
+# 
+# Forgive first $50,000 for all families with incomes less than $34,000
+#  $34,000 is about the 25th percentile of income
+#
+df_student_loan$dselect<- as.numeric( df_student_loan$fam_income<=34000)
+thresh_label<-"First $50,000 for all families with incomes less than $34,000"
+print( paste("Forgive first $50,000 for all families with incomes less than $34,000"))
+forgive_threshold<-50000
+print( paste("forgiveness threshold ",prettyNum(forgive_threshold,big.mark = ",")))  
+forgive_descript_groups(df_student_loan,forgive_threshold)
+
+# 
+# Forgive first $100,000 when family income is less than $25000 and there is public assistance income
+#
+df_student_loan$dselect<- as.numeric(df_student_loan$fam_income<=25000 & df_student_loan$dpublic_aid==1)
+thresh_label<-"Family income less than $25000"
+print( paste("Forgive first $100,000 when family income is less than $25,000 and there is public assistance income, "))
+forgive_threshold<-100000
+print( paste("forgiveness threshold ",prettyNum(forgive_threshold,big.mark = ",")))  
+forgive_descript_groups(df_student_loan,forgive_threshold)
+
+#
+#     Now just do thresholds
+#
+
+# 
+# Forgive first $10,000 
+#
+df_student_loan$dselect<- 1
+thresh_label<-"Forgive first $10,000 for all families"
+print( paste("Forgive first $10,000 for all families, "))
+forgive_threshold<-10000
+print( paste("forgiveness threshold ",prettyNum(forgive_threshold,big.mark = ",")))  
+forgive_descript_groups(df_student_loan,forgive_threshold)
+
+# 
+# Forgive first $25,000 
+#
+df_student_loan$dselect<- 1
+thresh_label<-"Forgive first $25,000 for all families"
+print( paste("Forgive first $25,000 for all families, "))
+forgive_threshold<-25000
+print( paste("forgiveness threshold ",prettyNum(forgive_threshold,big.mark = ",")))  
+forgive_descript_groups(df_student_loan,forgive_threshold)
+
+# 
+# Forgive first $50,000 
+#
+df_student_loan$dselect<- 1
+thresh_label<-"Forgive first $50,000 for all families"
+print( paste("Forgive first $50,000 for all families, "))
+forgive_threshold<-50000
+print( paste("forgiveness threshold ",prettyNum(forgive_threshold,big.mark = ",")))  
+forgive_descript_groups(df_student_loan,forgive_threshold)
+
+# 
+# Forgive first $75,000 
+#
+df_student_loan$dselect<- 1
+thresh_label<-"Forgive first $75,000 for all families"
+print( paste("Forgive first $75,000 for all families, "))
+forgive_threshold<-75000
+print( paste("forgiveness threshold ",prettyNum(forgive_threshold,big.mark = ",")))  
+forgive_descript_groups(df_student_loan,forgive_threshold)
+
+# 
+# Forgive first $100,000 
+#
+df_student_loan$dselect<- 1
+thresh_label<-"Forgive first $100,000 for all families"
+print( paste("Forgive first $100,000 for all families, "))
+forgive_threshold<-100000
+print( paste("forgiveness threshold ",prettyNum(forgive_threshold,big.mark = ",")))  
+forgive_descript_groups(df_student_loan,forgive_threshold)
+
+
+```
